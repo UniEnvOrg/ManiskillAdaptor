@@ -1,0 +1,23 @@
+[project]
+name = "unienv_maniskill"
+version = "0.0.1a3"
+readme = "README.md"
+license = "MIT"
+requires-python = ">= 3.10"
+dependencies = [
+    "unienv",
+    "mani-skill>=3.0.0b12",
+]
+
+[project.optional-dependencies]
+
+[project.urls]
+Homepage = "https://github.com/UniEnvOrg/ManiskillAdaptor"
+Documentation = "https://github.com/UniEnvOrg/ManiskillAdaptor"
+Repository = "https://github.com/UniEnvOrg/ManiskillAdaptor"
+Issues = "https://github.com/UniEnvOrg/ManiskillAdaptor/issues"
+Changelog = "https://github.com/UniEnvOrg/ManiskillAdaptor/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+include = ["*"]
+exclude = ["training*", "tests*"]
