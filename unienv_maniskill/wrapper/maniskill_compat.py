@@ -1,5 +1,6 @@
 from typing import Any, Optional, Tuple, Dict, Union, SupportsFloat, Sequence
 from mani_skill.envs.sapien_env import BaseEnv as ManiSkillBaseEnv
+from mani_skill.utils import common as maniskill_common
 import gymnasium as gym
 import torch
 import numpy as np
@@ -62,6 +63,24 @@ def convert_maniskill_to_backend(
     else:
         return convert_maniskill_array_to_backend(data, backend, device)
 
+def _data_matches_gym_space(data: Any, gym_space: gym.Space) -> bool:
+    """Whether the (batched) ManiSkill data has the structure, shapes and dtypes of ``gym_space``."""
+    if isinstance(gym_space, gym.spaces.Dict):
+        return (
+            isinstance(data, dict)
+            and data.keys() == gym_space.spaces.keys()
+            and all(_data_matches_gym_space(data[key], sub_space) for key, sub_space in gym_space.spaces.items())
+        )
+    if isinstance(gym_space, gym.spaces.Box):
+        if isinstance(data, torch.Tensor):
+            dtype = torch.empty(0, dtype=data.dtype).numpy().dtype
+        elif isinstance(data, np.ndarray):
+            dtype = data.dtype
+        else:
+            return False
+        return tuple(data.shape) == tuple(gym_space.shape) and dtype == gym_space.dtype
+    return True
+
 class FromManiSkillEnv(
     Env[
         PyTorchComputeBackend.ARRAY_TYPE,
@@ -83,32 +102,87 @@ class FromManiSkillEnv(
         self.device = env.get_wrapper_attr("device")
         self.batch_size = env.get_wrapper_attr("num_envs")
 
-        action_space = space_gym_utils.from_gym_space(
-            env.action_space,
-            self.backend,
-            device=self.device
-        )
-        if env.get_wrapper_attr("num_envs") <= 1:
-            # Weirdly Maniskill doesn't batch the action space when num_envs is 1 but will batch the observation space
-            action_space = space_batch_utils.batch_space(
-                action_space,
-                1
-            )
-        self.action_space = annotate(action_space, {
-            "": maniskill_action_metadata(env.unwrapped, action_space)
-        })
-
-        observation_space = space_gym_utils.from_gym_space(
-            env.observation_space,
-            self.backend,
-            device=self.device
-        )
-        self.observation_space = annotate(
-            observation_space,
-            maniskill_observation_metadata(env.unwrapped, observation_space)
-        )
+        # The spaces are converted from (and kept in sync with) the gymnasium spaces of `env`
+        self._gym_action_space = None
+        self._gym_observation_space = None
+        self._refresh_spaces()
         self.context_space = None
         self.rng = torch.Generator(device=self.device)
+
+    # =========== Spaces ==========
+    @property
+    def action_space(self) -> Space:
+        self._refresh_spaces()
+        return self._action_space
+
+    @action_space.setter
+    def action_space(self, space: Space) -> None:
+        # Kept until the action space of the ManiSkill env changes
+        self._action_space = space
+
+    @property
+    def observation_space(self) -> Space:
+        self._refresh_spaces()
+        return self._observation_space
+
+    @observation_space.setter
+    def observation_space(self, space: Space) -> None:
+        # Kept until the observation space of the ManiSkill env changes
+        self._observation_space = space
+
+    def _refresh_spaces(self) -> None:
+        """Convert (and describe) the gymnasium spaces of the ManiSkill env again if they changed.
+
+        ManiSkill replaces its observation space when it is regenerated
+        (``BaseEnv.update_obs_space``, used by its observation wrappers and by
+        :meth:`reset` after a reconfiguration).
+        """
+        gym_action_space = self.env.action_space
+        if gym_action_space is not self._gym_action_space:
+            action_space = space_gym_utils.from_gym_space(
+                gym_action_space,
+                self.backend,
+                device=self.device
+            )
+            if self.env.get_wrapper_attr("num_envs") <= 1:
+                # Weirdly Maniskill doesn't batch the action space when num_envs is 1 but will batch the observation space
+                action_space = space_batch_utils.batch_space(
+                    action_space,
+                    1
+                )
+            self._action_space = annotate(action_space, {
+                "": maniskill_action_metadata(self.env.unwrapped, action_space)
+            })
+            self._gym_action_space = gym_action_space
+
+        gym_observation_space = self.env.observation_space
+        if gym_observation_space is not self._gym_observation_space:
+            observation_space = space_gym_utils.from_gym_space(
+                gym_observation_space,
+                self.backend,
+                device=self.device
+            )
+            self._observation_space = annotate(
+                observation_space,
+                maniskill_observation_metadata(self.env.unwrapped, observation_space)
+            )
+            self._gym_observation_space = gym_observation_space
+
+    def _update_maniskill_observation_space(self, obs: Any) -> None:
+        """Regenerate ManiSkill's observation space if ``obs`` (a full reset after a reconfiguration) no longer fits it.
+
+        ManiSkill builds its observation space once, from the first
+        observation, and keeps it when a reconfiguration (e.g. with changed
+        sensor configs) changes the observations. It is regenerated here the way
+        ManiSkill's own observation wrappers do. A wrapper that defines its own
+        observation space is left alone.
+        """
+        base_env = self.env.unwrapped
+        if self.env.observation_space is not base_env.observation_space:
+            return
+        if _data_matches_gym_space(obs, base_env.observation_space):
+            return
+        base_env.update_obs_space(maniskill_common.to_cpu_tensor(obs))
 
     @property
     def metadata(self) -> Dict[str, Any]:
@@ -135,21 +209,26 @@ class FromManiSkillEnv(
         *args,
         mask: Optional[np.ndarray] = None,
         seed: Optional[int] = None,
+        options: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Tuple[
         None,
         Any,
         Dict[str, Any]
     ]:
-        options = None if mask is None else {
-            "env_idx": torch.nonzero(mask).flatten()
-        }
+        """Reset the ManiSkill env; ``options`` are passed on (e.g. ``{"reconfigure": True}``)."""
+        options = dict(options) if options else {}
+        if mask is not None:
+            options["env_idx"] = torch.nonzero(mask).flatten()
         obs, info = self.env.reset(
             *args,
             seed=seed,
-            options=options,
+            options=options or None,
             **kwargs
         )
+        if isinstance(info, dict) and bool(info.get("reconfigure", False)):
+            self._update_maniskill_observation_space(obs)
+        self._refresh_spaces()
         # We don't convert the obs using from_gym_data here 
         # because the array may not be numpy array
         obs = convert_maniskill_to_backend(

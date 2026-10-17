@@ -176,3 +176,52 @@ def test_maniskill_action_metadata(control_mode : str, expected : typing.Dict[st
             assert "range" not in env.action_space.metadata
     finally:
         env.env.close()
+
+
+def test_maniskill_observation_space_follows_reconfigure():
+    """The observation space is converted (and described) again when ManiSkill's observations change."""
+    num_envs = 2 if TEST_GPU_SIM else 1
+    env = FromManiSkillEnv(gym.make(
+        "PickCube-v1",
+        obs_mode="rgb+depth",
+        sim_backend="gpu" if TEST_GPU_SIM else "cpu",
+        render_backend="gpu" if TEST_GPU_SIM else "cpu",
+        num_envs=num_envs,
+    ))
+    try:
+        camera = "sensor_data/base_camera"
+        assert leaf(env.observation_space, f"{camera}/rgb").shape == (num_envs, 128, 128, 3)
+
+        # Change the camera resolution; it takes effect when the scene is reconfigured
+        env.env.unwrapped._custom_sensor_configs = dict(width=64, height=48)
+        _, obs, info = env.reset(options=dict(reconfigure=True))
+        assert info["reconfigure"]
+        assert obs["sensor_data"]["base_camera"]["rgb"].shape == (num_envs, 48, 64, 3)
+        assert leaf(env.observation_space, f"{camera}/rgb").shape == (num_envs, 48, 64, 3)
+        assert leaf(env.observation_space, f"{camera}/depth").shape == (num_envs, 48, 64, 1)
+        assert obs in env.observation_space
+        # ... and described again
+        validate_metadata(env.observation_space)
+        assert_metadata(leaf(env.observation_space, f"{camera}/rgb"), kind="image", format="rgb", source="base_camera")
+        assert_metadata(leaf(env.observation_space, f"{camera}/depth"), kind="depth", units="mm")
+        assert_metadata(leaf(env.observation_space, "agent/qpos"), kind="proprio", units=EXPECTED_QPOS_UNITS["PickCube-v1"])
+
+        obs, _, _, _, _ = env.step(env.sample_action())
+        assert obs in env.observation_space
+
+        # A partial reset keeps working with the new space
+        mask = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
+        mask[0] = True
+        _, part_obs, _ = env.reset(mask=mask)
+        obs = env.update_observation_post_reset(obs, part_obs, mask)
+        assert obs in env.observation_space
+
+        # ManiSkill observation wrappers regenerate the space with `update_obs_space`
+        space_before = env.observation_space
+        base_env = env.env.unwrapped
+        base_env.update_obs_space(base_env._init_raw_obs)
+        assert env.observation_space is not space_before
+        assert env.observation_space == space_before
+        assert_metadata(leaf(env.observation_space, f"{camera}/rgb"), kind="image", source="base_camera")
+    finally:
+        env.env.close()
