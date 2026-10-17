@@ -2,8 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
-## 0.0.1a4 (unreleased)
+## 0.0.1a4 (2026-10-17)
 
+- Relicensed under the Apache License 2.0 (previously MIT); `NOTICE` carries the copyright and third-party attributions.
 - Describe the spaces with unienv space metadata (requires `unienv>=0.0.1b16`), from what ManiSkill knows about the data rather than from key names:
   - `agent/qpos` / `agent/qvel`: `kind="proprio"` with the robot's active joint names and per-joint units from the joint types (`rad` / `m`, `rad/s` / `m/s`); controller targets (`agent/controller/...`) likewise.
   - `sensor_data/<camera>/...`: `source` = camera uid and `fps` = `control_freq`; `rgb` (and `albedo`) as `uint8` HWC RGB images, `depth` in `mm` (HWC, one channel), `segmentation`, `position` (`mm`, OpenGL camera frame), `normal`; in `obs_mode="sensor_data"` the raw shader textures (`Color` RGBA, `PositionSegmentation` / `Position` / `Segmentation`) of the `minimal`, `default` and `rt*` shader packs.
