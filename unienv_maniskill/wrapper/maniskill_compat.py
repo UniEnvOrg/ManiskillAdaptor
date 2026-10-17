@@ -10,6 +10,9 @@ from unienv_interface.backends import ComputeBackend, BArrayType, BDeviceType, B
 from unienv_interface.backends.numpy import NumpyComputeBackend, NumpyArrayType, NumpyDeviceType, NumpyDtypeType, NumpyRNGType
 from unienv_interface.backends.pytorch import PyTorchComputeBackend, PyTorchArrayType, PyTorchDeviceType, PyTorchDtypeType, PyTorchRNGType
 from unienv_interface.space.space_utils import batch_utils as space_batch_utils, gym_utils as space_gym_utils
+from unienv_interface.space.space_utils.metadata_utils import annotate
+
+from .maniskill_metadata import maniskill_observation_metadata, maniskill_action_metadata
 
 MANISKILL_ENV_ARRAYTYPE = Union[PyTorchArrayType, NumpyArrayType]
 MANISKILL_ENV_DEVICETYPE = Union[PyTorchDeviceType, NumpyDeviceType]
@@ -80,22 +83,29 @@ class FromManiSkillEnv(
         self.device = env.get_wrapper_attr("device")
         self.batch_size = env.get_wrapper_attr("num_envs")
 
-        self.action_space = space_gym_utils.from_gym_space(
+        action_space = space_gym_utils.from_gym_space(
             env.action_space,
             self.backend,
             device=self.device
         )
         if env.get_wrapper_attr("num_envs") <= 1:
             # Weirdly Maniskill doesn't batch the action space when num_envs is 1 but will batch the observation space
-            self.action_space = space_batch_utils.batch_space(
-                self.action_space,
+            action_space = space_batch_utils.batch_space(
+                action_space,
                 1
             )
-        
-        self.observation_space = space_gym_utils.from_gym_space(
+        self.action_space = annotate(action_space, {
+            "": maniskill_action_metadata(env.unwrapped, action_space)
+        })
+
+        observation_space = space_gym_utils.from_gym_space(
             env.observation_space,
             self.backend,
             device=self.device
+        )
+        self.observation_space = annotate(
+            observation_space,
+            maniskill_observation_metadata(env.unwrapped, observation_space)
         )
         self.context_space = None
         self.rng = torch.Generator(device=self.device)
