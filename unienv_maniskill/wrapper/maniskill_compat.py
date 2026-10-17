@@ -301,6 +301,10 @@ class FromManiSkillEnv(
                 return dat.squeeze(0)
             else:
                 return None
+
+    def close(self) -> None:
+        """Close the wrapped ManiSkill environment."""
+        self.env.close()
         
     # =========== Wrapper methods ==========
     def has_wrapper_attr(self, name: str) -> bool:

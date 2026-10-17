@@ -175,7 +175,7 @@ def test_maniskill_action_metadata(control_mode : str, expected : typing.Dict[st
             # the rotation is not mapped linearly onto the controller bounds
             assert "range" not in env.action_space.metadata
     finally:
-        env.env.close()
+        env.close()
 
 
 def test_maniskill_observation_space_follows_reconfigure():
@@ -224,4 +224,12 @@ def test_maniskill_observation_space_follows_reconfigure():
         assert env.observation_space == space_before
         assert_metadata(leaf(env.observation_space, f"{camera}/rgb"), kind="image", source="base_camera")
     finally:
-        env.env.close()
+        env.close()
+
+
+def test_close_closes_the_wrapped_env():
+    closed = []
+    env = object.__new__(FromManiSkillEnv)  # no simulator needed
+    env.env = type("FakeGymEnv", (), {"close": lambda self: closed.append(True)})()
+    env.close()
+    assert closed == [True]
